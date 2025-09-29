@@ -8,3 +8,4 @@ wheels/
 .github/copilot-instructions.md
 # Virtual environments
 .venv
+.ruff_cache/
