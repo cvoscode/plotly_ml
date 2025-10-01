@@ -2,7 +2,7 @@
 source-dir = "src"
 [project]
 name = "plotly-ml"
-version = "0.1.0"
+version = "0.1.5"
 description = "Interactive ML Visualizations with Plotly"
 readme = "README.md"
 requires-python = ">=3.12"
