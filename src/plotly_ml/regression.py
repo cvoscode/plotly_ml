@@ -6,8 +6,8 @@ import plotly.subplots as sp
 import polars as pl
 from typing import Union
 
-from src.utils.metrics import rmse, r2_score, mae, bias, var, count
-from src.utils.colors import to_rgba
+from plotly_ml.utils.metrics import rmse, r2_score, mae, bias, var, count
+from plotly_ml.utils.colors import to_rgba
 
 
 def regression_evaluation_plot(

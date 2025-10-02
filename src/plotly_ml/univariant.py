@@ -5,7 +5,7 @@ import plotly.express as px
 
 # from colors import to_rgba
 from typing import Union, List, Optional
-from src.utils.colors import to_rgba
+from plotly_ml.utils.colors import to_rgba
 
 
 def raincloud_plot(
