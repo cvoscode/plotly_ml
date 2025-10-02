@@ -789,8 +789,8 @@ wheels = [
 
 [[package]]
 name = "plotly-ml"
-version = "0.1.5"
-source = { virtual = "." }
+version = "0.1.7"
+source = { editable = "." }
 dependencies = [
     { name = "ipykernel" },
     { name = "ipywidgets" },
