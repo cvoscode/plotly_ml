@@ -1,5 +1,6 @@
 # First define a helper function for R2 score at the start of your main function
 import polars as pl
+import numpy as np
 
 
 def r2_score(y_true: pl.Series, y_pred: pl.Series) -> float:
@@ -40,7 +41,7 @@ def rmse(y_true: pl.Series, y_pred: pl.Series) -> float:
     Returns:
         float: Root mean square error.
     """
-    return ((y_true - y_pred) ** 2).mean().sqrt()
+    return np.sqrt(((y_true - y_pred) ** 2).mean())
 
 
 def bias(y_true: pl.Series, y_pred: pl.Series) -> float:

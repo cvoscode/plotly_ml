@@ -12,7 +12,7 @@ from plotly_ml.utils.colors import to_rgba
 
 def regression_evaluation_plot(
     data: Union[pl.DataFrame, pd.DataFrame] = None,
-    y: str = None,
+    y: list[str] = None,
     split_column: str = "set",
     template="plotly_white",
     colors: list = None,
