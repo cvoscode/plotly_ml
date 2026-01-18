@@ -1197,7 +1197,7 @@ wheels = [
 
 [[package]]
 name = "plotly-ml"
-version = "0.1.15"
+version = "0.1.17"
 source = { editable = "." }
 dependencies = [
     { name = "ipykernel" },
