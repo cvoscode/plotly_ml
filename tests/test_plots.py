@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import polars as pl
-from plotly_ml import regression, univariant
+from plotly_ml import regression, univariant, pariplot
 
 
 def _assert_valid_figure(fig):
@@ -97,3 +97,36 @@ def test_regression_with_custom_colors_and_template():
         colors=["#636EFA", "#EF553B"],
     )
     _assert_valid_figure(fig)
+
+
+def test_pairplot_basic_numeric():
+    df = pd.DataFrame(
+        {
+            "a": [1, 2, 3, 4, 5],
+            "b": [2.0, 1.5, 3.2, 2.8, 4.1],
+            "c": [5, 4, 3, 2, 1],
+        }
+    )
+    fig = pariplot.pairplot(df)
+    _assert_valid_figure(fig)
+
+
+def test_pairplot_with_hue_hist_and_trend():
+    df = pl.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [2, 1, 3, 2, 5, 4],
+            "z": [5, 3, 4, 2, 1, 6],
+            "group": ["A", "A", "B", "B", "A", "B"],
+        }
+    )
+    fig = pariplot.pairplot(
+        df,
+        hue="group",
+        diag="hist",
+        trend="ols",
+        corr=["pearson", "spearman"],
+    )
+    _assert_valid_figure(fig)
+    annotations = fig.to_dict().get("layout", {}).get("annotations", [])
+    assert len(annotations) > 0

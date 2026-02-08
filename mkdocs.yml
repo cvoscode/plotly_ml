@@ -28,6 +28,7 @@ nav:
     - Colors: api/colors.md
     - Regression: api/regression.md
     - Univariant: api/univariant.md
+    - Pariplot: api/pariplot.md
 
 plugins:
   - search
