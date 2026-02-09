@@ -14,33 +14,198 @@
 /* ------------------------------------------------------------------ */
 let _plotlyPromise = null;
 
-function ensurePlotly() {
+function ensurePlotly(plotlyJsText) {
   if (window.Plotly) return Promise.resolve(window.Plotly);
   if (_plotlyPromise) return _plotlyPromise;
 
-  _plotlyPromise = new Promise(function (resolve, reject) {
-    var existing = document.querySelector(
-      'script[src*="cdn.plot.ly/plotly"]'
-    );
-    if (existing) {
-      var check = setInterval(function () {
-        if (window.Plotly) {
-          clearInterval(check);
-          resolve(window.Plotly);
-        }
-      }, 50);
-      return;
-    }
+  function tryRequire() {
+    return new Promise(function (resolve, reject) {
+      var req = window.requirejs || window.require;
+      if (!req) {
+        reject(new Error("requirejs not available"));
+        return;
+      }
 
-    var s = document.createElement("script");
-    s.src = "https://cdn.plot.ly/plotly-2.35.2.min.js";
-    s.onload = function () {
-      resolve(window.Plotly);
-    };
-    s.onerror = function () {
-      reject(new Error("Failed to load Plotly.js from CDN"));
-    };
-    document.head.appendChild(s);
+      var tried = [];
+      function attempt(names, pick) {
+        return new Promise(function (res, rej) {
+          tried.push(names.join(","));
+          try {
+            req(names, function () {
+              try {
+                var args = Array.prototype.slice.call(arguments);
+                var maybe = pick.apply(null, args);
+                if (maybe) {
+                  res(maybe);
+                } else {
+                  rej(new Error("module loaded but Plotly not found"));
+                }
+              } catch (e) {
+                rej(e);
+              }
+            }, function (err) {
+              rej(err || new Error("require() failed"));
+            });
+          } catch (e) {
+            rej(e);
+          }
+        });
+      }
+
+      // Best-effort: different frontends expose Plotly differently.
+      // - Some register a 'plotly' module that is the Plotly object.
+      // - Some expose Plotly as a property on plotlywidget.
+      // - Some only set window.Plotly.
+      attempt(["plotly"], function (m) {
+        return m && (m.Plotly || m.default || m);
+      })
+        .catch(function () {
+          return attempt(["plotlywidget"], function (w) {
+            return w && (w.Plotly || (w.default && w.default.Plotly) || null);
+          });
+        })
+        .then(function (Plotly) {
+          if (Plotly) {
+            window.Plotly = window.Plotly || Plotly;
+            resolve(Plotly);
+          } else {
+            reject(new Error("Plotly not found via require(): " + tried.join(" | ")));
+          }
+        })
+        .catch(function (err) {
+          err = err || new Error("Plotly not found via require()");
+          err.message = "Plotly not found via require(): " + tried.join(" | ") + "\n" + err.message;
+          reject(err);
+        });
+    });
+  }
+
+  _plotlyPromise = new Promise(function (resolve, reject) {
+    // Attempt 1: Jupyter/requirejs-provided Plotly (no remote scripts)
+    tryRequire()
+      .then(function (Plotly) {
+        resolve(Plotly);
+      })
+      .catch(function () {
+        // Attempt 2: load embedded Plotly.js from the widget model.
+        // This avoids network access and works in restricted environments.
+
+        function loadFromEmbedded(text) {
+          return new Promise(function (res, rej) {
+            if (!text || typeof text !== "string" || text.length < 1000) {
+              rej(new Error("No embedded Plotly.js available"));
+              return;
+            }
+
+            try {
+              var blob = new Blob([text], { type: "text/javascript" });
+              var url = URL.createObjectURL(blob);
+              var s = document.createElement("script");
+              s.src = url;
+              s.async = true;
+              s.onload = function () {
+                // Revoke URL after load; Plotly should now be on window.
+                try {
+                  URL.revokeObjectURL(url);
+                } catch (e) {
+                  /* best-effort */
+                }
+                if (window.Plotly) {
+                  res(window.Plotly);
+                } else {
+                  rej(new Error("Embedded Plotly.js loaded but window.Plotly is missing"));
+                }
+              };
+              s.onerror = function () {
+                try {
+                  URL.revokeObjectURL(url);
+                } catch (e) {
+                  /* best-effort */
+                }
+                rej(new Error("Failed to load embedded Plotly.js"));
+              };
+              document.head.appendChild(s);
+            } catch (e) {
+              rej(e);
+            }
+          });
+        }
+
+        loadFromEmbedded(plotlyJsText)
+          .then(function (Plotly) {
+            resolve(Plotly);
+          })
+          .catch(function () {
+            // Attempt 3: load from a CDN via <script>.
+        // VS Code's Jupyter widget sandbox may block some hosts unless allowed
+        // via the "Jupyter: Widget Script Sources" setting. jsDelivr/unpkg are
+        // commonly allowed by default.
+
+        function waitForPlotly(timeoutMs) {
+          return new Promise(function (res, rej) {
+            var start = Date.now();
+            var t = setInterval(function () {
+              if (window.Plotly) {
+                clearInterval(t);
+                res(window.Plotly);
+              } else if (Date.now() - start > (timeoutMs || 8000)) {
+                clearInterval(t);
+                rej(new Error("Timed out waiting for window.Plotly"));
+              }
+            }, 50);
+          });
+        }
+
+        function loadScript(url) {
+          return new Promise(function (res, rej) {
+            // If already present, just wait for Plotly.
+            var existing = document.querySelector('script[src="' + url + '"]');
+            if (existing) {
+              waitForPlotly(8000).then(res).catch(rej);
+              return;
+            }
+
+            var s = document.createElement("script");
+            s.src = url;
+            s.async = true;
+            s.onload = function () {
+              waitForPlotly(8000).then(res).catch(rej);
+            };
+            s.onerror = function () {
+              rej(new Error("Failed to load script: " + url));
+            };
+            document.head.appendChild(s);
+          });
+        }
+
+        var urls = [
+          "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js",
+          "https://unpkg.com/plotly.js-dist-min@2.35.2/plotly.min.js",
+          "https://cdn.plot.ly/plotly-2.35.2.min.js",
+        ];
+
+        (function tryNext(i, lastErr) {
+          if (i >= urls.length) {
+            reject(
+              new Error(
+                "Failed to load Plotly.js from any CDN. Last error: " +
+                  (lastErr && lastErr.message ? lastErr.message : String(lastErr))
+              )
+            );
+            return;
+          }
+          loadScript(urls[i])
+            .then(function (Plotly) {
+              resolve(Plotly);
+            })
+            .catch(function (err) {
+              tryNext(i + 1, err);
+            });
+        })(0, null);
+          });
+      });
+
+    // Note: reject is handled by the CDN loader branch.
   });
   return _plotlyPromise;
 }
@@ -251,7 +416,35 @@ function setupCrossfilter(gd, Plotly, statusEl, combineMode) {
 
 export default {
   async render({ model, el }) {
-    var Plotly = await ensurePlotly();
+    var Plotly;
+    try {
+      var plotlyJsText = model.get("plotly_js");
+      Plotly = await ensurePlotly(plotlyJsText);
+    } catch (err) {
+      var msg =
+        "Plotly ML pairplot widget failed to load Plotly.js.\n\n" +
+        "This usually happens when the notebook frontend blocks remote scripts.\n" +
+        "The widget tries to load Plotly.js from the embedded bundle first, then (jsDelivr / unpkg / cdn.plot.ly).\n\n" +
+        "Fixes:\n" +
+        "- Trust the notebook/workspace (VS Code restricted mode disables widget JS).\n" +
+        "- Ensure VS Code Jupyter widget rendering is enabled (Jupyter + Jupyter Renderers).\n" +
+        "- In VS Code settings, allow the needed host(s) in 'Jupyter: Widget Script Sources' (try allowing jsDelivr / unpkg), then restart the kernel.\n\n" +
+        "- If you are offline: restart the kernel so the embedded Plotly.js is sent to the widget.\n\n" +
+        "Error: " +
+        (err && err.message ? err.message : String(err));
+
+      var pre = document.createElement("pre");
+      pre.textContent = msg;
+      pre.style.whiteSpace = "pre-wrap";
+      pre.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+      pre.style.fontSize = "12px";
+      pre.style.padding = "10px";
+      pre.style.border = "1px solid #ddd";
+      pre.style.borderRadius = "8px";
+      pre.style.background = "#fafafa";
+      el.appendChild(pre);
+      return function () {};
+    }
 
     var status = null;
 

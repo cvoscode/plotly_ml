@@ -50,3 +50,13 @@ The library includes several components for different visualization needs:
 - **Univariant Analysis**: Distribution analysis with raincloud plots
 - **Metrics**: Common regression metrics (R², RMSE, MAE, etc.)
 - **Colors**: Utilities for color handling and conversion
+
+## Troubleshooting (VS Code notebooks)
+
+Some visualizations (notably the crossfiltering pairplot) use **AnyWidget** and need `ipywidgets` rendering support in the frontend.
+
+If a widget shows up as plain text (e.g. `PairplotWidget(...)`) instead of an interactive view:
+
+- Trust the workspace / notebook (restricted mode disables widget JavaScript).
+- Ensure VS Code extensions `ms-toolsai.jupyter` and `ms-toolsai.jupyter-renderers` are installed and enabled.
+- Review the `Jupyter: Widget Script Sources` setting if scripts are being blocked.

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import anywidget
 import traitlets
 import plotly.io as pio
+from plotly.offline import get_plotlyjs
 
 if TYPE_CHECKING:
     import plotly.graph_objects as go
@@ -39,9 +40,16 @@ class PairplotWidget(anywidget.AnyWidget):
     _esm = pathlib.Path(__file__).parent / "_widget.js"
 
     fig_json = traitlets.Unicode("{}").tag(sync=True)
+    plotly_js = traitlets.Unicode("").tag(sync=True)
 
     def __init__(self, fig: go.Figure, **kwargs):
-        super().__init__(fig_json=pio.to_json(fig, engine="json"), **kwargs)
+        # VS Code's Jupyter widget sandbox can block loading Plotly.js from remote
+        # CDNs. Embedding Plotly.js here allows the frontend to load it locally.
+        super().__init__(
+            fig_json=pio.to_json(fig, engine="json"),
+            plotly_js=get_plotlyjs(),
+            **kwargs,
+        )
 
     # -- public helpers ------------------------------------------------
 
