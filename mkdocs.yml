@@ -26,6 +26,8 @@ nav:
   - API Reference:
     - Metrics: api/metrics.md
     - Colors: api/colors.md
+    - Classification: api/classification.md
+    - Comparison: api/comparison.md
     - Regression: api/regression.md
     - Univariant: api/univariant.md
     - Pariplot: api/pariplot.md

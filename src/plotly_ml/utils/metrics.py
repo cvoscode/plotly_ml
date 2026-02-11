@@ -1,6 +1,23 @@
 # First define a helper function for R2 score at the start of your main function
-import polars as pl
 import numpy as np
+import polars as pl
+
+
+def _clean_regression_arrays(
+    y_true: pl.Series, y_pred: pl.Series
+) -> tuple[np.ndarray, np.ndarray]:
+    df = pl.DataFrame({"y_true": y_true, "y_pred": y_pred}).with_columns(
+        [
+            pl.col("y_true").cast(pl.Float64),
+            pl.col("y_pred").cast(pl.Float64),
+        ]
+    )
+    df = df.drop_nulls().filter(
+        pl.col("y_true").is_finite() & pl.col("y_pred").is_finite()
+    )
+    if df.height == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+    return df.get_column("y_true").to_numpy(), df.get_column("y_pred").to_numpy()
 
 
 def r2_score(y_true: pl.Series, y_pred: pl.Series) -> float:
@@ -13,9 +30,18 @@ def r2_score(y_true: pl.Series, y_pred: pl.Series) -> float:
     Returns:
         float: R² score. Best possible score is 1.0, and it can be negative.
     """
-    ss_res = ((y_true - y_pred) ** 2).sum()
-    ss_tot = ((y_true - y_true.mean()) ** 2).sum()
-    return 1 - (ss_res / ss_tot)
+    yt, yp = _clean_regression_arrays(y_true, y_pred)
+    if yt.size == 0:
+        return float("nan")
+
+    ss_res = float(np.sum((yt - yp) ** 2))
+    ss_tot = float(np.sum((yt - float(np.mean(yt))) ** 2))
+
+    # Match common behavior (e.g., sklearn) for constant targets.
+    if ss_tot == 0.0:
+        return 1.0 if ss_res == 0.0 else 0.0
+
+    return 1.0 - (ss_res / ss_tot)
 
 
 def mae(y_true: pl.Series, y_pred: pl.Series) -> float:

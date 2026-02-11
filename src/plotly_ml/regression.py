@@ -4,10 +4,31 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.subplots as sp
 import polars as pl
-from typing import Union
+from typing import Optional, Union
 
 from plotly_ml.utils.metrics import rmse, r2_score, mae, bias, var, count
 from plotly_ml.utils.colors import to_rgba
+
+
+def _as_polars(data: Union[pl.DataFrame, pd.DataFrame]) -> pl.DataFrame:
+    if isinstance(data, pd.DataFrame):
+        return pl.from_pandas(data)
+    return data
+
+
+def _clean_regression_xy(data: pl.DataFrame, y_true: str, y_pred: str) -> pl.DataFrame:
+    if y_true not in data.columns or y_pred not in data.columns:
+        raise ValueError(f"Data must contain columns '{y_true}' and '{y_pred}'")
+    return (
+        data.select(
+            [
+                pl.col(y_true).cast(pl.Float64).alias(y_true),
+                pl.col(y_pred).cast(pl.Float64).alias(y_pred),
+            ]
+        )
+        .drop_nulls()
+        .filter(pl.col(y_true).is_finite() & pl.col(y_pred).is_finite())
+    )
 
 
 def regression_evaluation_plot(
@@ -38,8 +59,26 @@ def regression_evaluation_plot(
     Returns:
         go.Figure: A plotly figure object containing the regression evaluation plots.
     """
-    if isinstance(data, pd.DataFrame):
-        data = pl.from_pandas(data)
+    data = _as_polars(data)
+    if split_column not in data.columns:
+        raise ValueError(f"split_column '{split_column}' not found")
+    if "y_true" not in data.columns or "y_pred" not in data.columns:
+        raise ValueError("Data must contain columns 'y_true' and 'y_pred'")
+
+    # Clean inputs (drop nulls and non-finite) so metrics/plots (esp. R²) are reliable.
+    data = (
+        data.select(
+            [
+                pl.col(split_column),
+                pl.col("y_true").cast(pl.Float64).alias("y_true"),
+                pl.col("y_pred").cast(pl.Float64).alias("y_pred"),
+            ]
+        )
+        .drop_nulls()
+        .filter(pl.col("y_true").is_finite() & pl.col("y_pred").is_finite())
+    )
+    if data.height == 0:
+        raise ValueError("No valid rows after cleaning y_true/y_pred")
 
     specs = [
         [
@@ -77,8 +116,8 @@ def regression_evaluation_plot(
     )
 
     # Add reference lines
-    min_val = min(data["y_true"].min(), data["y_pred"].min())
-    max_val = max(data["y_true"].max(), data["y_pred"].max())
+    min_val = float(min(data["y_true"].min(), data["y_pred"].min()))
+    max_val = float(max(data["y_true"].max(), data["y_pred"].max()))
     fig.add_trace(
         go.Scattergl(
             x=[min_val, max_val],
@@ -311,4 +350,483 @@ def regression_evaluation_plot(
     fig.update_xaxes(visible=True, showticklabels=True, row=4, col=1)
     fig.update_xaxes(matches="x4", row=2, col=2)
     fig.update_layout(violinmode="overlay")
+    return fig
+
+
+def residuals_vs_fitted_plot(
+    data: Union[pl.DataFrame, pd.DataFrame],
+    y_true: str = "y_true",
+    y_pred: str = "y_pred",
+    *,
+    split_column: Optional[str] = None,
+    template: str = "plotly_white",
+    colors: Optional[list[str]] = None,
+    title: str = "Residuals vs Fitted",
+    width: int = 750,
+    height: int = 500,
+    marginal_y: Optional[str] = None,
+) -> go.Figure:
+    """Scatter plot of residuals vs fitted values."""
+    if colors is None:
+        colors = px.colors.qualitative.D3
+
+    df = _as_polars(data)
+    if split_column is None:
+        splits: list[pl.DataFrame] = [df]
+    else:
+        if split_column not in df.columns:
+            raise ValueError(f"split_column '{split_column}' not found")
+        splits = list(df.partition_by(split_column))
+
+    # Option: use plotly express with marginal distributions on y-axis
+    if marginal_y is not None:
+        # marginal_y can be 'box', 'violin', 'rug', or 'histogram'
+        # build a pandas DataFrame with residuals and fitted values
+        if isinstance(data, pl.DataFrame):
+            df_pd = data.to_pandas()
+        else:
+            df_pd = pd.DataFrame(data)
+        # compute residual column
+        df_pd = df_pd.copy()
+        df_pd["__resid__"] = df_pd[y_true] - df_pd[y_pred]
+        color_col = (
+            split_column
+            if (split_column is not None and split_column in df_pd.columns)
+            else None
+        )
+        fig = px.scatter(
+            df_pd,
+            x=y_pred,
+            y="__resid__",
+            color=color_col,
+            marginal_y=marginal_y,
+            template=template,
+        )
+        # styling: only update scatter traces (histogram traces don't accept marker.size)
+        for tr in fig.data:
+            if isinstance(tr, (go.Scatter, go.Scattergl)):
+                tr.update(marker=dict(size=5, opacity=0.7))
+        fig.add_hline(y=0, line=dict(color="black", dash="dash"))
+        fig.update_layout(
+            title=title,
+            xaxis_title="Fitted (y_pred)",
+            yaxis_title="Residual (y_true - y_pred)",
+            width=width,
+            height=height,
+            autosize=False,
+            legend_title_text=None,
+        )
+        return fig
+
+    # standard non-marginal scatter
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 0],
+            mode="lines",
+            line=dict(color="black", dash="dash"),
+            name="Zero",
+            showlegend=False,
+        )
+    )
+
+    for i, split_df in enumerate(splits):
+        name = (
+            "All"
+            if split_column is None
+            else str(split_df.get_column(split_column).first())
+        )
+        d = _clean_regression_xy(split_df, y_true, y_pred)
+        if d.height == 0:
+            continue
+        y_t = d.get_column(y_true).to_numpy()
+        y_p = d.get_column(y_pred).to_numpy()
+        resid = y_t - y_p
+        color = colors[i % len(colors)]
+        fig.add_trace(
+            go.Scattergl(
+                x=y_p,
+                y=resid,
+                mode="markers",
+                name=name,
+                marker=dict(size=5, color=to_rgba(color, 0.65)),
+            )
+        )
+
+    fig.update_layout(
+        template=template,
+        title=title,
+        xaxis_title="Fitted (y_pred)",
+        yaxis_title="Residual (y_true - y_pred)",
+        width=width,
+        height=height,
+        autosize=False,
+        legend_title_text=None,
+    )
+    return fig
+
+
+def qq_plot(
+    data: Union[pl.DataFrame, pd.DataFrame],
+    y_true: str = "y_true",
+    y_pred: str = "y_pred",
+    *,
+    split_column: Optional[str] = None,
+    template: str = "plotly_white",
+    colors: Optional[list[str]] = None,
+    title: str = "Q-Q Plot (Residuals)",
+    width: int = 650,
+    height: int = 650,
+) -> go.Figure:
+    """Normal Q-Q plot of residuals."""
+    if colors is None:
+        colors = px.colors.qualitative.D3
+
+    try:
+        from scipy.stats import norm  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise ImportError("scipy is required for qq_plot") from e
+
+    df = _as_polars(data)
+    if split_column is None:
+        splits: list[pl.DataFrame] = [df]
+    else:
+        if split_column not in df.columns:
+            raise ValueError(f"split_column '{split_column}' not found")
+        splits = list(df.partition_by(split_column))
+
+    fig = go.Figure()
+
+    for i, split_df in enumerate(splits):
+        name = (
+            "All"
+            if split_column is None
+            else str(split_df.get_column(split_column).first())
+        )
+        d = _clean_regression_xy(split_df, y_true, y_pred)
+        if d.height < 3:
+            continue
+        resid = (d.get_column(y_true) - d.get_column(y_pred)).to_numpy()
+        resid = resid[np.isfinite(resid)]
+        resid = np.sort(resid)
+        n = resid.size
+        if n < 3:
+            continue
+
+        p = (np.arange(1, n + 1) - 0.5) / n
+        theo = norm.ppf(p)
+
+        # Fit a reference line (robust enough for a visual guide)
+        slope, intercept = np.polyfit(theo, resid, 1)
+        color = colors[i % len(colors)]
+        fig.add_trace(
+            go.Scatter(
+                x=theo,
+                y=resid,
+                mode="markers",
+                name=name,
+                marker=dict(size=6, color=to_rgba(color, 0.7)),
+            )
+        )
+        x_line = np.array([theo.min(), theo.max()])
+        y_line = slope * x_line + intercept
+        fig.add_trace(
+            go.Scatter(
+                x=x_line,
+                y=y_line,
+                mode="lines",
+                name=f"{name} · Ref",
+                showlegend=False,
+                line=dict(color=color, dash="dash"),
+            )
+        )
+
+    fig.update_layout(
+        template=template,
+        title=title,
+        xaxis_title="Theoretical quantiles (Normal)",
+        yaxis_title="Residual quantiles",
+        width=width,
+        height=height,
+        autosize=False,
+        legend_title_text=None,
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    fig.update_xaxes(constrain="domain")
+    return fig
+
+
+def binned_actual_vs_pred_plot(
+    data: Union[pl.DataFrame, pd.DataFrame],
+    y_true: str = "y_true",
+    y_pred: str = "y_pred",
+    *,
+    split_column: Optional[str] = None,
+    n_bins: int = 10,
+    ci: float = 0.95,
+    template: str = "plotly_white",
+    colors: Optional[list[str]] = None,
+    title: str = "Binned Actual vs Predicted",
+    width: int = 650,
+    height: int = 650,
+) -> go.Figure:
+    """Plot binned mean actual vs mean predicted with a confidence interval."""
+    if colors is None:
+        colors = px.colors.qualitative.D3
+
+    if not (0 < ci < 1):
+        raise ValueError("ci must be between 0 and 1")
+    z = 1.96 if abs(ci - 0.95) < 1e-9 else 1.96
+
+    df = _as_polars(data)
+    if split_column is None:
+        splits: list[pl.DataFrame] = [df]
+    else:
+        if split_column not in df.columns:
+            raise ValueError(f"split_column '{split_column}' not found")
+        splits = list(df.partition_by(split_column))
+
+    # Determine sensible axis limits from the data so the ideal line spans the plotted range
+    # Use the whole dataset (not just per-split) to avoid tiny dangling segments.
+    try:
+        global_min = float(
+            np.nanmin(
+                np.r_[
+                    df.get_column(y_pred).to_numpy(), df.get_column(y_true).to_numpy()
+                ]
+            )
+        )
+        global_max = float(
+            np.nanmax(
+                np.r_[
+                    df.get_column(y_pred).to_numpy(), df.get_column(y_true).to_numpy()
+                ]
+            )
+        )
+    except Exception:
+        global_min, global_max = 0.0, 1.0
+
+    fig = go.Figure()
+    # Ideal line spanning data min/max
+    fig.add_trace(
+        go.Scatter(
+            x=[global_min, global_max],
+            y=[global_min, global_max],
+            mode="lines",
+            line=dict(color="black", dash="dash"),
+            name="Ideal",
+            showlegend=False,
+        )
+    )
+
+    for i, split_df in enumerate(splits):
+        name = (
+            "All"
+            if split_column is None
+            else str(split_df.get_column(split_column).first())
+        )
+        d = _clean_regression_xy(split_df, y_true, y_pred)
+        if d.height < 3:
+            continue
+
+        # Bin by predicted value quantiles
+        q = np.linspace(0, 1, int(n_bins) + 1)
+        edges = np.quantile(d.get_column(y_pred).to_numpy(), q)
+        # Avoid duplicated edges
+        edges = np.unique(edges)
+        if edges.size < 3:
+            continue
+
+        y_p = d.get_column(y_pred).to_numpy()
+        y_t = d.get_column(y_true).to_numpy()
+        bin_idx = np.digitize(y_p, edges[1:-1], right=True)
+
+        xs: list[float] = []
+        ys: list[float] = []
+        err: list[float] = []
+        for b in range(edges.size - 1):
+            mask = bin_idx == b
+            if not np.any(mask):
+                continue
+            xs.append(float(np.mean(y_p[mask])))
+            mean = float(np.mean(y_t[mask]))
+            ys.append(mean)
+            std = float(np.std(y_t[mask], ddof=1)) if np.sum(mask) > 1 else 0.0
+            se = std / max(1.0, np.sqrt(float(np.sum(mask))))
+            err.append(z * se)
+
+        if not xs:
+            continue
+        color = colors[i % len(colors)]
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines+markers",
+                name=name,
+                line=dict(color=color, width=2),
+                marker=dict(color=to_rgba(color, 0.8), size=7),
+                error_y=dict(type="data", array=err, visible=True),
+            )
+        )
+
+    fig.update_layout(
+        template=template,
+        title=title,
+        xaxis_title="Mean predicted (per bin)",
+        yaxis_title="Mean actual (per bin)",
+        width=width,
+        height=height,
+        autosize=False,
+        legend_title_text=None,
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    fig.update_xaxes(constrain="domain")
+    return fig
+
+
+def residuals_by_group_plot(
+    data: Union[pl.DataFrame, pd.DataFrame],
+    y_true: str = "y_true",
+    y_pred: str = "y_pred",
+    group: str = "group",
+    *,
+    split_column: Optional[str] = None,
+    template: str = "plotly_white",
+    colors: Optional[list[str]] = None,
+    title: str = "Residuals by Group",
+    width: int = 900,
+    height: int = 450,
+) -> go.Figure:
+    """Violin plot of residual distributions by group."""
+    if colors is None:
+        colors = px.colors.qualitative.D3
+
+    df = _as_polars(data)
+    if group not in df.columns:
+        raise ValueError(f"group column '{group}' not found")
+
+    select_cols = [
+        pl.col(group).cast(pl.Utf8).alias(group),
+        pl.col(y_true),
+        pl.col(y_pred),
+    ]
+    if split_column is not None:
+        if split_column not in df.columns:
+            raise ValueError(f"split_column '{split_column}' not found")
+        select_cols.append(pl.col(split_column).cast(pl.Utf8).alias(split_column))
+
+    base = df.select(select_cols)
+    base = base.drop_nulls()
+
+    if split_column is None:
+        splits: list[pl.DataFrame] = [base]
+    else:
+        splits = list(base.partition_by(split_column))
+
+    fig = go.Figure()
+    for i, split_df in enumerate(splits):
+        split_name = None
+        if split_column is not None:
+            split_name = str(split_df.get_column(split_column).first())
+
+        d = (
+            split_df.with_columns(
+                (
+                    pl.col(y_true).cast(pl.Float64) - pl.col(y_pred).cast(pl.Float64)
+                ).alias("__resid__")
+            )
+            .drop_nulls()
+            .filter(pl.col("__resid__").is_finite())
+        )
+
+        color = colors[i % len(colors)]
+
+        # If there are exactly two groups, draw half-violins facing each other for a compact comparison
+        groups = d.get_column(group).to_list()
+        try:
+            unique_groups = list(dict.fromkeys(groups))
+        except Exception:
+            unique_groups = list(set(groups))
+
+        if len(unique_groups) == 2:
+            g0, g1 = unique_groups[0], unique_groups[1]
+            vals0 = d.filter(pl.col(group) == g0).get_column("__resid__").to_numpy()
+            vals1 = d.filter(pl.col(group) == g1).get_column("__resid__").to_numpy()
+
+            # Use distinct colors per group and draw half-violins that overlay
+            color0 = colors[0 % len(colors)]
+            color1 = colors[1 % len(colors)]
+
+            # Place both halves at the same categorical x so they directly face each other.
+            pair_label = f"{g0} · {g1}"
+            fig.add_trace(
+                go.Violin(
+                    x=[pair_label] * len(vals0),
+                    y=vals0,
+                    name=str(g0),
+                    side="negative",
+                    box_visible=True,
+                    meanline_visible=True,
+                    opacity=0.75,
+                    line_color=color0,
+                    fillcolor=to_rgba(color0, 0.35),
+                    points=False,
+                    width=0.9,
+                    offsetgroup="paired",
+                    alignmentgroup="paired",
+                )
+            )
+
+            fig.add_trace(
+                go.Violin(
+                    x=[pair_label] * len(vals1),
+                    y=vals1,
+                    name=str(g1),
+                    side="positive",
+                    box_visible=True,
+                    meanline_visible=True,
+                    opacity=0.75,
+                    line_color=color1,
+                    fillcolor=to_rgba(color1, 0.35),
+                    points=False,
+                    width=0.9,
+                    offsetgroup="paired",
+                    alignmentgroup="paired",
+                )
+            )
+
+            # ensure x-axis shows a readable label for the pair
+            fig.update_xaxes(
+                tickmode="array", tickvals=[pair_label], ticktext=[f"{g0} vs {g1}"]
+            )
+        else:
+            # Fall back to one violin trace that creates separate violins per category
+            fig.add_trace(
+                go.Violin(
+                    x=d.get_column(group).to_list(),
+                    y=d.get_column("__resid__").to_numpy(),
+                    name="All" if split_name is None else split_name,
+                    box_visible=True,
+                    meanline_visible=True,
+                    opacity=0.75,
+                    line_color=color,
+                    fillcolor=to_rgba(color, 0.35),
+                    points=False,
+                )
+            )
+
+    fig.update_layout(
+        template=template,
+        title=title,
+        width=width,
+        height=height,
+        autosize=False,
+        violinmode="group",
+        violingap=0.0,
+        xaxis_title=group,
+        yaxis_title="Residual (y_true - y_pred)",
+        legend_title_text=None,
+    )
     return fig
