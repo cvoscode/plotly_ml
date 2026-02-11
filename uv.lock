@@ -1311,7 +1311,7 @@ wheels = [
 
 [[package]]
 name = "plotly-ml"
-version = "0.1.18"
+          version = "0.1.19"
 source = { editable = "." }
 dependencies = [
     { name = "anywidget" },
