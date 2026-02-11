@@ -1,6 +1,6 @@
-plotly-ml — Interactive, code-first ML visualizations
+# plotly-ml — Interactive, code-first ML visualizations
 
-plotly-ml provides a scikit-learn-style, developer-friendly toolkit for building interactive visualizations for machine learning workflows using Plotly. It focuses on producing publication-ready visuals while staying highly scriptable and notebook-first.
+plotly-ml provides a scikit-learn-style, developer-friendly toolkit for building interactive visualizations for machine learning workflows using Plotly. It focuses on producing publication-ready visuals while staying highly scriptable and notebook-first. It styled similar to the inspiration for the project: yellowbricks
 
 Why it matters
 - Build interactive diagnostics, model-comparison dashboards, and exploratory visualizations that integrate directly into data pipelines and notebooks.
@@ -11,7 +11,6 @@ Key features
 - Scikit-learn-like visualizers: familiar, composable call patterns for quick integration.
 - Notebook widgets: `AnyWidget`-based components (e.g., crossfilter pairplot) for interactive exploration.
 - Polars-first data handling with seamless fallback to Pandas.
-- AutoGluon-compatible interfaces for model introspection and comparison.
 - Exportable HTML outputs and embedding-ready Plotly figures.
 
 Quickstart
@@ -22,24 +21,36 @@ Install (project uses `uv` for dependency sync):
 uv sync
 ```
 
-Minimal example (using `pandas`):
-
-```python
-import pandas as pd
-from plotly_ml import pairplot
-
-df = pd.read_csv("data.csv")
-fig = pairplot(df, columns=["feature1", "feature2", "label"])  # returns a Plotly figure
-fig.show()
-```
-
+# Minimal example (using `pandas`):
 In a Jupyter notebook, use the widget for crossfiltering pairplots:
-
 ```python
+
+df_pair_hue = pd.DataFrame(
+    {
+        "x": np.random.normal(0, 1.0, 400),
+        "y": np.random.normal(0.5, 1.1, 400),
+        "z": np.random.normal(-0.2, 0.9, 400),
+        "group": np.where(np.random.rand(400) > 0.5, "A", "B"),
+    }
+)
 from plotly_ml._widget import PairplotWidget
-pw = PairplotWidget(df, columns=["feature1","feature2","label"])
-pw
+pw  = pariplot.pairplot(
+    df_pair_hue,
+    hue="group",
+    diag="kde",
+    link_selection=True,
+    height=700,
+    width=700,
+)
 ```
+![alt text](/images/image-1.png)
+
+# Other plots:
+## Raincloud
+![alt text](/images/image-2.png)
+# Regression Report:
+![alt text](images/image.png)
+
 
 Documentation & examples
 - Full docs and API reference are in the `docs/` site (see `docs/index.md`).
